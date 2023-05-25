@@ -1,0 +1,413 @@
+---
+title: "STA130 Rstudio Homework"
+author: "[Student Name] ([Student Number]), with Josh Speagle & Scott Schwartz"
+subtitle: Problem Set 8
+urlcolor: blue
+output:
+  pdf_document: default
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(eval=TRUE, include=TRUE, echo=TRUE, message=FALSE, warning=FALSE)
+```
+
+# Instructions
+
+Complete the exercises in this `.Rmd` file and submit your `.Rmd` and knitted `.pdf` output through [Quercus](https://q.utoronto.ca/courses/296457) by 11:59 pm E.T. on Thursday, March 23.
+
+```{r, message=FALSE}
+library(tidyverse)
+library(rpart)
+library(partykit)
+library(randomForest)
+R.version
+```
+
+```{r}
+student_num =  1008992609
+student_num_last3 =  1008992609
+```
+
+# Question 1: Life Expectancy and Decision Trees
+
+In this question, we will be returning to some of the data shown in class involving data collected from the Gallup World Poll and World Happiness Report.
+
+```{r}
+# load in data
+happiness2017 <- read_csv("happiness2017.csv")
+glimpse(happiness2017)
+```
+
+Originally, we used this data to highlight differences in some broad statistical summaries, explore data tables in R, and get some practice describing distributions. Now that we've advanced further in the course, we will turn our attention to trying to use what we've learned to predict various outcomes.
+
+\
+**(a)** To start, first **clean the data** by removing any rows where there are *any* `NA` values. Report the number of rows that are removed.
+
+*Hint: The `na.omit()` function may be useful here.*
+
+```{r}
+na.omit(happiness2017)
+```
+
+\
+**(b)** Let's try to come up with a model for predicting the life expectancy (`life_exp`). Create a new variable called `life_exp_category` which is a **factor** that takes the value `Good` for countries with a life expectancy higher than 65 years, and `Poor` otherwise. Then, print out a summary table showing the number of countries in each group and their median life expectancy.
+
+```{r}
+new <-happiness2017 %>%
+  mutate(life_exp_category = ifelse(life_exp > 65, "Good", "Poor"))
+newer<-na.omit(new)
+Good<-filter(newer, life_exp_category =="Good")
+Poor<-filter(newer, life_exp_category =="Poor")
+
+data = data.frame(num_good = c(length(unique(Good$country))),
+                  med_good = c(median(Good$life_exp)),
+                  num_poor = c(length(unique(Poor$country))),
+                  med_poor = c(median(Poor$life_exp)))
+data
+
+
+
+```
+
+
+\
+**(c)** Now divide the data randomly into 3 groups:
+
+- a **training set** containing 60% of the data,
+- a **validation set** containing 20% of the data, and
+- a **testing set** containing 20% of the data.
+
+Then print out the **number of observations as well as the median and interquartile range of the life expectancy** for each subset of the data (training/validation/testing) grouped by `Good` vs `Poor` to verify each subset has similar values.
+
+*Hint: One strategy to make three splits is to first split the data up 70%/30%, and then split the last 30% into 20% (2/3rds) and 10% (1/3rd). Another would be to try creating a list of (shuffled) indices, splitting that up 70/20/10, and then selecting the relevant rows with matching indices. Or you could create a set of groups (`train`, `valid`. `test`) with the right number of objects in each group, shuffle it, add it to the data frame, and then filter the results. There are a lot of different approaches available that you should be able to try out now!*
+
+*Hint: You might also find your code from HW7 helpful here.*
+
+```{r}
+set.seed(609)  # required to ensure reproducibility
+suffle <- newer[sample(nrow(newer)),]
+total_samples <- nrow(newer)
+samples_60 <- total_samples * 0.6
+samples_20 <- total_samples * 0.2
+random_idx <- sample(1:total_samples)
+
+group1 <- newer[random_idx[1:samples_60], ]
+group2 <- newer[random_idx[(samples_60 + 1):(samples_60 + samples_20)], ]
+group3 <- newer[random_idx[(samples_60 + samples_20 + 1):total_samples], ]
+
+#training
+group_by(group1, life_exp_category) %>%
+  summarise(median(life_exp),
+            IQR(life_exp))
+#validation
+group_by(group2, life_exp_category) %>%
+  summarise(median(life_exp),
+            IQR(life_exp))
+#testing
+group_by(group3, life_exp_category) %>%
+  summarise(median(life_exp),
+            IQR(life_exp))
+
+```
+
+\
+**(d)** Using `rpart()`, build a **classification tree** using the **training data** to predict which countries' life expectancy category (**label**) is `Good` or `Poor` based on the following **input features**:
+
+- Tree 1: `social_support` and `logGDP`
+- Tree 2: `logGDP`, `social_support`, `freedom`, and `generosity`
+
+*Hint: The syntax for the input formula is `rpart(y ~ x1 + x2 + x3)` since no interaction terms are allowed in the input formula.*
+
+```{r}
+set.seed(610)  # required to ensure reproducibility
+tree1<-rpart(life_exp_category ~ social_support + logGDP, data = group1)
+tree2<-rpart(life_exp_category ~ logGDP + social_support + freedom + generosity, data = group1)
+tree1
+tree2
+```
+
+\
+**(e)** At the beginning of the document, we loaded in the `partykit` package to help us visualize the trees. Using the syntax `plot(as.party(tree), type="simple", gp=gpar(cex=0.5))`, make a **visualization** each of your classification trees.
+
+```{r}
+plot(as.party(tree1), type="simple", gp=gpar(cex=0.5))
+plot(as.party(tree2), type="simple", gp=gpar(cex=0.5))
+```
+
+Describe the apparent behaviour of the each tree, along with any similarities and/or differences between the two, based on the above plots.
+
+> *Both trees zigzag but tree2 is much longer.*
+
+
+# Question 2: Feature Importances
+
+In class, we discussed several ways to calculate the impact of various input explanatory/independent variables (features) on our final predictions in the context of our model. One of the options we looked at was the **"fractional (normalized) effect size"**, defined as:
+
+$$ \hat{f}_{i,j} \equiv \frac{|\hat{e}_{i,j}|}{\sum_j |\hat{e}_{i,j}|} $$
+
+where again $$\hat{e}_{i,j}$$ is the **effect** that the $j$th variable $x_j$ has on the prediction $\hat{y}_i$ for the $i$th object:
+
+$$ \hat{e}_{i, j} = \hat{\beta}_j \times x_{i, j} $$
+
+In other words, while $\hat{e}_{i,j}$ tells us directly the amount to which $x_{i,j}$ contributes to the final prediction (e.g., +5), $\hat{f}_{i,j}$ tells us what fraction of the total prediction is driven by that effect (e.g., 0.6, or 60%).
+
+Averaging this information across the entire $n$ observations in our sample then gives us an estimate of the **feature importance** (i.e. "the fraction of the information contributed by that particular variable (on average)"):
+
+$$ \bar{f}_{j} \equiv \frac{1}{n} \sum_{i=1}^{n} \hat{f}_{i,j} $$
+
+Classification trees are able to compute a similar estimate for the feature importance that applies to classification problems. The exact method is quite technical, but is related to exactly how well various splits using various features affect the final classification accuracy for a given number of objects. Essentially, the more a hypothetical split with a given feature improves the performance, and the more objects that split affects, the "more important" that feature is.
+
+\
+**(a)** For each of the two trees you fit above, plot the **feature importance**, normalized as a percentage (i.e. adding up to 100). You are free to use whatever plot type you prefer.
+
+*Hint: You can access the (unnormalized) feature importance values of a fitted tree model using the syntax `tree$variable.importance`. You can grab the order and names of the input features associated with the variable importances using the `names(x)` function.*
+
+```{r}
+
+imp <-tree1$variable.importance
+imp <- imp / sum(imp) * 100
+imp
+imp <-tree2$variable.importance
+imp <- imp / sum(imp) * 100
+imp
+```
+
+\
+**(b)** Write 1-2 discussing what conclusions you might draw from these results concerning what feature(s) are the most important.
+
+> *Money and social support make the largest portions of both trees meaning people care about about these two.*
+
+
+# Question 3: Loss Functions
+
+In class, we discussed two potential **loss functions** (also called score functions or cost functions) for classification. One is based on the **Gini impurity**, which is related to the expected number of misclassifications we would expect across all objects if we were guessing randomly (with probability $p_i$ the $i$th observation is `Good` and $1-p_i$ it is `Poor`):
+
+$$ G = 2 \sum_{i=1}^{n} p_i \, (1 - p_i) = n - \sum_{i=1}^{n} p_i^2 - \sum_{i=1}^{n} (1 - p_i)^2 $$
+
+The other was related to the expected amount of **information gain/loss** (i.e. **entropy**) associated with each predicted probability:
+
+$$ E = - \sum_{i=1}^{n} p_i \log p_i $$
+
+Our classification tree tries to make decisions/splits based on choices that either maximizes the "purity" in each node (if we're using the Gini impurity) or maximize the amount of "information" we retain (if we're using the entropy).
+
+\
+**(a)** The default loss function used when training a decision tree is the Gini impurity (`"gini"`). Train two new trees that use the **information loss** (`"information"`) instead.
+
+*Hint: You can use the `?rpart` call to pull up documentation on the available options for the code. You can specify the specific loss function you want to use for splitting in the `parms` argument using the syntax `parms=list(split="information")`.*
+
+```{r}
+set.seed(611)  # required to ensure reproducibility
+new1<-rpart(life_exp_category ~ social_support + logGDP, data = group1, parms=list(split="information"))
+new2<-rpart(life_exp_category ~ logGDP + social_support + freedom + generosity, data = group1, parms=list(split="information"))
+new1
+new2
+```
+
+\
+**(b)** Make visualizations of the new decision trees using the same syntax as Question 1.
+
+```{r}
+
+plot(as.party(new1), type="simple", gp=gpar(cex=0.5))
+plot(as.party(new2), type="simple", gp=gpar(cex=0.5))
+```
+
+Comment on any similarities and/or differences you see between the behaviour of these new trees (trained using `information`) vs the old trees (trained using `gini`).
+
+> *The new tress are much more similar.*
+
+\
+**(c)** Using your new trees, make new versions of the feature importance plots you generated as part of Question 2.
+
+```{r}
+imp <- new1$variable.importance
+imp <- imp/sum(imp) * 100
+imp
+imp <- new2$variable.importance
+imp <- imp/sum(imp) * 100
+imp
+```
+
+Comment on any similarities and/or differences you see between the feature importances of these new trees (trained using `information`) vs the old trees (trained using `gini`).
+
+> *They're similar and the logGDP alongside social_support are still the most important*
+
+
+# Question 4: Confusion Matrices
+
+We now want to figure out which one of our four classification trees appears to best describe the data.
+
+\
+**(a)** Using the **validation data**, calculate the **confusion matrix** for the four trees you built above. Use a **classification threshold** of $p_{\rm class} > 0.5$ to assign an output prediction probability to a particular predicted class. As a reminder, a confusion matrix is a 2-by-2 matrix that shows the number of objects sorted by their true class vs their predicted class (similar to the matrix we construct to illustrate Type I vs Type II errors).
+
+*Hint: An example of code to compute a confusion matrix can be found within this week's lecture slides and rely on `predict()` and `table()`.*
+
+```{r}
+tree_pred1 <- predict(tree1, newdata = group2) %>%
+  as_tibble() %>%
+  mutate(prediction = ifelse(Good >= 0.5, "Predict Good", "Predict Poor"))
+table(tree_pred1$prediction, group2$life_exp_category)
+
+tree_pred2 <- predict(tree2, newdata = group2) %>%
+  as_tibble() %>%
+  mutate(prediction = ifelse(Good >= 0.5, "Predict Good", "Predict Poor"))
+table(tree_pred2$prediction, group2$life_exp_category)
+
+tree_pred3 <- predict(new1, newdata = group2) %>%
+  as_tibble() %>%
+  mutate(prediction = ifelse(Good >= 0.5, "Predict Good", "Predict Poor"))
+table(tree_pred3$prediction, group2$life_exp_category)
+
+
+tree_pred4 <- predict(new2, newdata = group2) %>%
+  as_tibble() %>%
+  mutate(prediction = ifelse(Good >= 0.5, "Predict Good", "Predict Poor"))
+table(tree_pred4$prediction, group2$life_exp_category)
+```
+
+\
+**(b)** Let's assume that `Good` is our "positive" prediction and `Poor` is a "negative" prediction. Based on the confusion matrices computed above, calculate the following quantities for each of the trees:
+
+- **precision** (i.e. the fraction of predicted `Good` values that are correct), 
+- **recall** (i.e. the fraction of true `Good` values that we correctly predict), and 
+- **accuracy** (i.e. the fraction of predictions we get correct for both `Good` and `Poor`)
+
+*Hint: See the slides from these week's class for examples of how to use a confusion matrix to compute each of these quantities, which involve summing across rows, columns, and the diagonal.*
+
+*Hint: You will likely want to run over your models in a `for` loop to simplify the calculations, and store the results in vectors/tibbles. If you haven't already, you can store your trees/confusion matrices in a list using the syntax `results <- list(x1, x2, x3, x4)` and access them later using `results[[i]]`. You can access the results from a particular row/column of the confusion matrix using the syntax `matrix[i, j]`.*
+
+```{r}
+# Tree1
+precision1 = 76/(76+15)
+recall1 = 76/(76+19)
+accuracy1 = (76+139)/(76+139+15+19)
+
+#tree2
+precision2 = 80/(80 + 19)
+recall2 = 80/(80+15)
+accuracy2 = (80+135)/(15+19+80+135)
+
+#tree3
+precision3 = 82/(82+22)
+recall3 = 82/(82+13)
+accuracy3 = (82+132)/(82+22+13+132)
+
+#tree4
+precision4 = 79/(79+19)
+recall4 = 79/(79+16)
+accuracy4 = (79+137)/(79+17+16+137)
+
+c(precision1,recall1,accuracy1,precision2,recall2,accuracy2,precision3,recall3,accuracy3,precision4,recall4,accuracy4)
+```
+
+Which model has the highest precision? Recall? Accuracy?
+
+> *Precision: Model 1, Recall: Model 3, Accuracy: Model 4*
+
+In your own words, please explain in 2-4 sentences what each metric means and under what circumstances we might want to use it to select a particular model.
+
+> *Precision is how many are genuinely true out of the ones predicted true, Recall are how many predicted true over how many are true, and accuracy is how many predicted correctly over the total. Use Precision and Recall when dataset is imbalanced and accuracy if the dataset is balanced.*
+
+Based on your results, which model would you consider to be the "best performing" and why?
+
+> *Model 4*
+
+\
+**(c)** Using the best-performing model identified above, compute the confusion matrix and the same metrics over the **test data**.
+
+```{r}
+#tree_pred4 <- predict(new2, newdata = group3) %>%  GROUP 3 INSTEAD
+#  as_tibble() %>%
+#  mutate(prediction = ifelse(Good >= 0.5, "Predict Good", "Predict Poor"))
+#table(tree_pred4$prediction, group2$life_exp_category)
+
+precision = 36/(36+57)
+recall = 36/(36+59)
+accuracy = (36+97)/(36+97+59+57)
+c(precision, recall, accuracy)
+table(tree_pred4$prediction, group2$life_exp_category)
+```
+
+Does the performance over the test data match up with what you expected based on the validation data? Why or why not?
+
+> *It does not.Perhaps because I generated the data differently. *
+
+\
+**(d)** Fill in the following table using the best-performing tree selected above.  
+
+*Hint: make a `tibble()` of this data and then use it with the `predict()` function.*
+
+|               | `logGDP` | `social_support` | `freedom` | `generosity` | Predicted life expectancy category |
+|---------------|----------|------------------|-----------|--------------|------------------------------------|
+| Obs 1         | 9.68     | 0.76             | NA        | -0.35        | *Poor* |
+| Obs 2         | 9.36     | NA               | 0.82      | -0.22        | *Poor* |
+| Obs 3         | 10.4     | 0.88             | 0.77      | 0.11         | *Good* |
+| Obs 4         | 9.94     | 0.85             | 0.63      | 0.01         | *Good* |
+
+```{r}
+tib <- data.frame("logGDP" = c(9.68, 9.36, 10.4, 9.94),
+                  "social_support" = c(0.76, NA, 0.88, 0.85),
+                  "freedom" = c(NA, 0.82, 0.77, 0.63),
+                  "generosity" = c(-0.35, -0.22, 0.11, 0.01))
+tib <-as.tibble(tib)
+
+tree_pred4 <- predict(new2, newdata = tib) %>%
+  as_tibble() %>%
+  mutate(prediction = ifelse(Good >= 0.5, "Predict Good", "Predict Poor"))
+tree_pred4
+```
+
+Does the fact that some of the values are missing (`NA`) prevent you from making predictions for the life expectancy category for these observations? Why might this be the case?
+
+> *No, maybe it sets it internally to 0.*
+
+# Question 5: From Trees to Forests
+
+One of the issues with classification trees is their tendency to **overfit** data and that their output predictions for class probabilities sometimes only take a limited range of values (because they only have a limited number of nodes to compare to). We can fix this issue by taking advantage of **bootstrapping**. Essentially, what we can do is the following:
+
+1. Create a new training set by bootstrap resampling our current training set.
+2. Train a classification tree on our bootstrapped data.
+3. Repeat this procedure $k$ times to get $k$ decision trees.
+
+Since this process generates many trees, and each tree is "random", the total collection of trees is often called a **random forest**. Classification is then often done by having each tree "vote" on a particular outcome (`Good` or `Poor`), and then aggregating all the votes afterwards.
+
+\
+**(a)** Using the `randomForest` package, train a **random forest classifier** using the same input features as your best-performing model. You do not need to modify any of the functions defaults (the default loss function used is the Gini impurity).
+
+*Hint: You can use `?randomForest` to learn more about how the function operates. The syntax for formulas is identical to that of `rpart()`, i.e. `randomForest(y ~ x1 + x2 + x3)`.*
+
+```{r}
+set.seed(612)  # required to ensure reproducibility
+forest<-randomForest(factor(life_exp_category) ~ logGDP + social_support + freedom + generosity, data = group1)
+forest
+```
+
+\
+**(b)** Using your random forest, make a new version of the feature importance plot you generated as part of Question 2.
+
+*Hint: These can be accessed with the syntax `rf$importance`, which returns a table. You can get the corresponding names from the table using the `rownames()` function.*
+
+```{r}
+imp<-forest$importance
+imp/sum(imp) * 100
+```
+
+How do these results compare to those from your best-performing classification tree? Are they what you expected? Why or why not?
+
+> *I didn't expect freedom and generosity to be as high as as they were.*
+
+\
+**(c)** Compute the corresponding confusion matrix and metrics (precision, recall, and accuracy) of your random forest classifier over the **test set**. 
+
+*Hint: Note that the output our `rf %>% predict(test)` is a vector of predicted classes rather than of probabilities.*
+
+```{r}
+#tree_pred4 <- predict(forest, newdata = group3) %>%
+#  as_tibble() %>%
+#  mutate(prediction = ifelse(Good >= 0.5, "Predict Good", "Predict Poor"))
+
+```
+
+How do these results compare to those from your best-performing classification tree? Are they what you expected? Why or why not?
+
+> *REPLACE THIS TEXT WITH YOUR ANSWER*

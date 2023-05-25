@@ -1,0 +1,252 @@
+---
+title: "Capstone Project"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+#load in tidyverse, set working directory, assign dataset to sleep variable
+library(tidyverse)
+setwd("/home/jovyan/STA Presentation")
+sleep <-read_csv("NEW_Sleep_Efficiency.csv")
+glimpse(sleep)
+```
+
+
+
+
+```{r}
+#cleaning data 
+sleep <- sleep %>%
+  filter(!is.na(`Sleep efficiency`) & !is.na(`Caffeine consumption`) & !is.na(`Alcohol consumption`) & !is.na(`Smoking status`) & !is.na(`Exercise frequency`) & !is.na('Deep sleep percentage'))
+
+#changed the column names because the names with two words had spaces which causes an error in lm() function, spent a lot of time realizing I had to replace all the column names
+colnames(sleep) <- c("ID", "Age", "Gender", "Bedtime", "Wakeup_time", "Sleep_duration",  "Sleep_efficiency", "REM_sleep_percentage", "Deep_sleep_percentage", "Light_sleep_percentage","Awakenings",
+                     "Caffeine_consumption", "Alcohol_consumption", "Smoking_status", "Exercise_frequency")
+```
+
+
+```{r}
+#since the research question is about time spent in deep sleep, which is not provided, I needed to solve for it.
+#use column deep_sleep_percentage and sleep duration to find the hours in deep sleep
+Deep_sleep_decimal = (sleep$Deep_sleep_percentage/100)*sleep$Sleep_duration
+#create a helper function to convert a fraction of time into characters for reader legibility e.g. 4.2 hours = 4h12mins
+convert_time <- function(decimal_hours) {
+  hour <- floor(decimal_hours)
+  minute <- round((decimal_hours - hour) * 60)
+  paste(hour, minute, sep = "h")
+}
+#add Deep_sleep_hours for ease of reading and Deep_sleep_decimals for predictions 
+new_sleep<-sleep %>% 
+  mutate(Deep_sleep_hours = convert_time(Deep_sleep_decimal),
+         Deep_sleep_decimal = Deep_sleep_decimal)
+
+```
+
+
+```{r}
+#Deep Sleep Analysis
+#split the data
+
+#check for outliers in data due to homoscedasticity assumption in linear regression
+#using Z-Score
+z_scores_x1 <- abs(scale(new_sleep$Caffeine_consumption))
+outliers_x1 <- which(z_scores_x1 > 3)
+
+z_scores_x2 <- abs(scale(new_sleep$Alcohol_consumption))
+outliers_x2 <- which(z_scores_x2 > 3)
+
+z_scores_x3 <- abs(scale(new_sleep$Exercise_frequency))
+outliers_x3 <- which(z_scores_x3 > 3)
+
+z_scores_x4 <- abs(scale(new_sleep$Deep_sleep_decimal))
+outliers_x4 <- which(z_scores_x4 > 3)
+
+z_scores_x5 <- abs(scale(new_sleep$Sleep_efficiency))
+outliers_x5 <- which(z_scores_x5 > 3)
+
+outliers <- c(outliers_x1, outliers_x2, outliers_x3, outliers_x4, outliers_x5)
+
+data_clean <- new_sleep[-outliers, ]
+#compare to see how many data points are outliers
+nrow(data_clean)
+nrow(new_sleep)
+#conclusion they're pretty similar, new_sleep has 3 more points
+#split the data
+set.seed(100)
+trainIndex <- sample(1:nrow(data_clean), 0.8 * nrow(data_clean))
+trainData <- data_clean[trainIndex, ]
+testData <- data_clean[-trainIndex, ]
+```
+```{r}
+#first we check for all possible ones
+model_one <- lm(Deep_sleep_decimal ~ Caffeine_consumption + Smoking_status + Exercise_frequency + Alcohol_consumption, data=trainData)
+summary(model_one)
+set.seed(101)
+predictions<-predict(model_one, testData)
+
+#check rmse to see how well model is able to predict target value
+rmse <-sqrt(mean((testData$Deep_sleep_decimal - predictions)^2))
+rmse
+```
+
+
+```{r}
+#since Caffeine_consumption's p value is above 0.05%, I will remove it to see changes in rmse
+set.seed(102)
+no_cc_model <- lm(Deep_sleep_decimal ~ Smoking_status + Exercise_frequency + Alcohol_consumption, data = trainData)
+summary(no_cc_model)
+no_cc_predictions <- predict(no_cc_model, testData)
+no_cc_rmse <- sqrt(mean((testData$Deep_sleep_decimal - no_cc_predictions)^2))
+no_cc_rmse
+```
+
+```{r}
+#as the rmse value for with caffeine is actually lower, i want to test if its due to random error
+#or if it was providing useful predictive information not captured
+
+#i will conduct a two sample t test to compare the two values to see the significance of the Caffeine
+#i tried many ways but none of them worked due to lack of data so i'm going to generate more
+
+#no matter how much data I generate I still only get one rmse value, meaning that there isn't enough variability in the data to come a conclusion on whether or not caffeine happens to influence the linear regression or it's just due to chance 
+#Here is some not deleted code I tried for a few hours to create both a two sample t-test and one sample t-test; comparing one to the other to solve for the p-value(comparing the models with caffeine and without) before googling what consistently returning one root mean squared error means.
+
+
+#set.seed(102)
+#sampled_data <- new_sleep[sample(nrow(new_sleep), 400), ]
+
+#combined_dataset<-rbind(new_sleep, sampled_data)
+#library(caret)
+#set.seed(103)
+
+# specify model formula
+#model_formula <- Deep_sleep_decimal ~ Smoking_status + Exercise_frequency + Alcohol_consumption + Caffeine_consumption
+
+# create training control object for 10-fold cross-validation, 
+#train_control <- trainControl(method = "cv", number = 10)
+
+#different attempt
+# create training control object for 20-fold cross-validation, repeated 3 times
+#train_control <- trainControl(method = "repeatedcv", number = 20)
+
+# fit your model using caret's train function
+#model <- train(formula = model_formula, data = combined_dataset, method = "lm", trControl = train_control)
+
+# view the RMSE values for each repeat and fold
+#model$results$RMSE
+
+#t.test(rmse1, rmse2, paired= TRUE)
+
+```
+
+```{r}
+#lets go back to the linear regression model without caffeine
+#find the normalized feature importance because the F stat indicates it is statistically significant and at least one predictor variable is related to response variable
+coefficients <- coef(no_cc_model)[-1] #removes intercept
+normalized_coef <- coefficients / sum(coefficients)
+normalized_coef
+```
+```{r}
+#first we check for all possible ones
+model_two <- lm(Sleep_efficiency ~ Caffeine_consumption + Smoking_status + Exercise_frequency + Alcohol_consumption, data=trainData)
+summary(model_two)
+set.seed(103)
+predictions<-predict(model_two, testData)
+
+#check rmse to see how well model is able to predict target value
+rmse <-sqrt(mean((testData$Sleep_efficiency - predictions)^2))
+#though rmse is much smaller, it is over a smaller range, however it looks reasonable
+rmse
+```
+
+```{r}
+#since Caffeine_consumption's p value is above 0.05%, I will remove it to see changes in rmse
+no_cc_model_two <- lm(Sleep_efficiency ~ Smoking_status + Exercise_frequency + Alcohol_consumption, data=trainData)
+summary(no_cc_model_two)
+set.seed(104)
+new_predictions<-predict(no_cc_model_two, testData)
+new_rmse <-sqrt(mean((testData$Sleep_efficiency - new_predictions)^2))
+new_rmse
+```
+
+```{r}
+#variance in data prevents variation
+#find the normalized feature importance because the F stat indicates it is statistically significant and at least one predictor variable is related to response variable
+coefficients <- coef(no_cc_model_two)[-1]
+normalized_coef <- coefficients / sum(coefficients)
+normalized_coef
+```
+
+
+```{r}
+#view rmse of multivariate multiple regression to see if its better than the other two
+#try to come up with conclusion on why we have to accept null hypothesis that it cannot predict so
+mmr <- lm(cbind(trainData$Sleep_efficiency, trainData$Deep_sleep_decimal) ~ Caffeine_consumption + Smoking_status + 
+Alcohol_consumption + Exercise_frequency, data = trainData)
+summary(mmr)
+predictions<-predict(mmr, testData)
+rmse <-sqrt(mean((cbind(testData$Sleep_efficiency, testData$Deep_sleep_decimal) - predictions)^2))
+rmse
+#rmse is lower than both of them we can assume it is a better fit than the other two
+new_mmr <- lm(cbind(trainData$Sleep_efficiency, trainData$Deep_sleep_decimal) ~  Smoking_status + 
+Alcohol_consumption + Exercise_frequency, data = trainData)
+summary(new_mmr)
+new_predictions<-predict(new_mmr, testData)
+new_rmse <-sqrt(mean((cbind(testData$Sleep_efficiency, testData$Deep_sleep_decimal) - new_predictions)^2))
+new_rmse
+
+
+coefficients <- coef(mmr)[-1]
+normalized_coef <- coefficients / sum(coefficients)
+normalized_coef
+
+
+coefficients <- coef(new_mmr)[-1]
+normalized_coef <- coefficients / sum(coefficients)
+normalized_coef
+
+
+install.packages("Matrix")
+library(Matrix)
+#check collinearity before concluding non-linearity and put this before conclusion
+vif <- function(model) {
+  require(Matrix)
+  X <- model.matrix(model)
+  vif_values <- diag(solve(t(X) %*% X))
+  vif_df <- data.frame(variable = colnames(X), VIF = vif_values)
+  return(vif_df)
+}
+
+x<-vif(lm(Sleep_efficiency ~ Smoking_status + Exercise_frequency + Alcohol_consumption, data=trainData))
+
+
+install.packages("GGally")
+library(GGally)
+predictors <- trainData[, c("Caffeine_consumption", "Smoking_status", "Alcohol_consumption", "Exercise_frequency")]
+response <- cbind(trainData$Sleep_efficiency, trainData$Deep_sleep_decimal)
+data <- cbind(response, predictors)
+
+
+#anotehr way to check non-linearity is with residual plots: i sued no_cc_model_two here as an example.
+#you can see an inverse fan pattern which indicates non-linearity
+plot(fitted(no_cc_model_two), residuals(no_cc_model_two), xlab = "Fitted values", ylab = "Residuals") abline(h = 0, lty = 2)
+
+ggpairs(data, columns = 1:6)
+#ggpairs(data, columns = 1:6, mapping = aes(color = y), 
+        #diag = list(continuous = "density"), 
+        #upper = list(continuous = "cor", params = list(method = "spearman")),
+        #lower = list(continuous = "smooth", params = list(method = "lm")), 
+        #axisLabels = "show", 
+        #ggplot2::labs(x = c("Caffeine_consumption", "Smoking_status", "Alcohol_consumption", "Exercise_frequency"), y = #cbind(trainData$Sleep_efficiency, trainData$Deep_sleep_decimal)))
+plot(fitted(no_cc_model_two), residuals(no_cc_model_two), xlab = "Fitted values", ylab = "Residuals") + abline(h = 0, lty = 2)
+
+#check google for importances of coffee on deep sleep checkbedtime
